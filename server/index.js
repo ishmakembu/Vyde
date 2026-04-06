@@ -47,8 +47,10 @@ const clients = new Map();
 /** Keyed by userId — lookup-only. Do NOT iterate this to broadcast. @type {Map<string, typeof clients extends Map<any, infer V> ? V : never>} */
 const userClients = new Map();
 
-/** @type {Map<string, { id: string, roomId: string, participants: Set<string>, status: string, startedAt: number | null }>} */
+/** @type {Map<string, { id: string, roomId: string, participants: Set<string>, status: string, startedAt: number|null, joinCode: string }>} */
 const callSessions = new Map();
+/** @type {Map<string, string>} join code → callId */
+const joinCodes = new Map();
 
 const eventBuffers = new Map();
 const processedEvents = new Map();
@@ -266,6 +268,60 @@ async function handleMessage(client, message, clientId) {
       break;
     }
 
+    case 'call:create': {
+      if (!client.userId) return;
+      const { callId, roomId, code } = payload;
+      const joinCode = (code || '').toUpperCase();
+      callSessions.set(callId, {
+        id: callId, roomId,
+        participants: new Set([client.userId]),
+        status: 'active', startedAt: Date.now(), joinCode,
+      });
+      if (joinCode) joinCodes.set(joinCode, callId);
+      client.inCall = callId;
+      broadcastPresence(client.userId, true);
+      // ACK — client already set the code in the store
+      client.ws.send(JSON.stringify({ type: 'room:peers', payload: { callId, roomId, peers: [] } }));
+      break;
+    }
+
+    case 'call:join_by_code': {
+      if (!client.userId) return;
+      const { code } = payload;
+      const upperCode = (code || '').trim().toUpperCase();
+      const targetCallId = joinCodes.get(upperCode);
+      if (!targetCallId) {
+        client.ws.send(JSON.stringify({ type: 'call:join_error', payload: { error: 'Invalid or expired join code' } }));
+        return;
+      }
+      const session = callSessions.get(targetCallId);
+      if (!session) {
+        joinCodes.delete(upperCode);
+        client.ws.send(JSON.stringify({ type: 'call:join_error', payload: { error: 'Call has ended' } }));
+        return;
+      }
+      if (session.participants.size >= 6) {
+        client.ws.send(JSON.stringify({ type: 'call:join_error', payload: { error: 'Call is full (max 6 participants)' } }));
+        return;
+      }
+      session.participants.add(client.userId);
+      client.inCall = targetCallId;
+      client.ws.send(JSON.stringify({ type: 'call:join_granted', payload: { callId: targetCallId, roomId: session.roomId, code: upperCode } }));
+      const peersForJoiner = Array.from(session.participants)
+        .filter((uid) => uid !== client.userId)
+        .map((uid) => { const c = userClients.get(uid); return { userId: uid, username: c?.username ?? 'Unknown', avatar: c?.avatar ?? null }; });
+      client.ws.send(JSON.stringify({ type: 'room:peers', payload: { callId: targetCallId, roomId: session.roomId, peers: peersForJoiner } }));
+      session.participants.forEach((uid) => {
+        if (uid === client.userId) return;
+        const c = userClients.get(uid);
+        if (c?.ws.readyState === WebSocket.OPEN) {
+          c.ws.send(JSON.stringify({ type: 'room:peer_joined', payload: { userId: client.userId, username: client.username ?? 'Unknown', avatar: client.avatar ?? null } }));
+        }
+      });
+      broadcastPresence(client.userId, true);
+      break;
+    }
+
     case 'call:initiate': {
       const { calleeId, roomId, callId, username: callerUsername, avatar: callerAvatar } = payload;
       if (!client.userId) return;
@@ -474,6 +530,7 @@ async function handleMessage(client, message, clientId) {
         }
       });
 
+      if (session.joinCode) joinCodes.delete(session.joinCode);
       callSessions.delete(callId);
       break;
     }

@@ -193,8 +193,9 @@ async function handleMessage(client, message, clientId) {
     case 'call:create': {
       // Creator opens a room with a join code; up to 6 participants can join
       if (!client.userId) return;
-      const { callId, roomId } = payload;
-      const code = generateJoinCode();
+      const { callId, roomId, code: clientCode } = payload;
+      // Prefer the client-supplied code (already set in their store); generate only as fallback
+      const code = (clientCode || '').toUpperCase() || generateJoinCode();
       callSessions.set(callId, {
         id: callId,
         roomId,
@@ -205,9 +206,11 @@ async function handleMessage(client, message, clientId) {
       });
       joinCodes.set(code, callId);
       client.inCall = callId;
-      // Tell the creator their join code
-      client.ws.send(JSON.stringify({ type: 'call:join_code', payload: { code, callId } }));
-      // Also send room:peers (no one else yet)
+      // Client already set the code; only send call:join_code if it was server-generated
+      if (!clientCode) {
+        client.ws.send(JSON.stringify({ type: 'call:join_code', payload: { code, callId } }));
+      }
+      // Send room:peers (no one else yet)
       client.ws.send(JSON.stringify({ type: 'room:peers', payload: { callId, roomId, peers: [] } }));
       broadcastPresence(client.userId, true);
       client.ws.send(JSON.stringify({ id, ok: true }));

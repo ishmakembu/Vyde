@@ -224,17 +224,25 @@ export default function DirectoryPage() {
   const onlineUsers = filteredUsers.filter(isUserOnline);
   const offlineUsers = filteredUsers.filter((user) => !isUserOnline(user));
 
+  function makeJoinCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    return code;
+  }
+
   const handleCreateCall = async () => {
     if (!session?.user?.id) return;
     setCreateCallLoading(true);
     const callId = `call-${Date.now()}`;
     const roomId = `room-${Date.now()}`;
+    const code = makeJoinCode();
     useCallStore.getState().setCallId(callId);
     useCallStore.getState().setRoomId(roomId);
+    useCallStore.getState().setJoinCode(code);
     useCallStore.getState().setStatus('connecting');
-    // Ask the WS server to create a named room with a join code
-    sendWsMessage({ type: 'call:create', payload: { callId, roomId } });
-    // Navigate immediately; join code will arrive via 'call:join_code' WS message
+    // Register the room + code on the server
+    sendWsMessage({ type: 'call:create', payload: { callId, roomId, code } });
     router.push('/call');
     setCreateCallLoading(false);
   };
