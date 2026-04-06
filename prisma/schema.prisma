@@ -1,0 +1,199 @@
+// Vide Database Schema
+// Based on VIDE_SPEC.md Section 4
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  passwordHash String
+  avatar       String?  // URL to uploaded image, or null for initials avatar
+  avatarColor  String?  // hex color for initials fallback
+  status       String?  // mood text e.g. "chilling ☕"
+  statusEmoji  String?
+  isPrivate    Boolean  @default(false)
+  bio          String?  // user bio/description
+  frameTheme   String   @default("default") // default | neon | fire | nature | minimal
+  lastSeen     DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Privacy controls
+  showLastSeen     Boolean  @default(true)   // hide "last seen" from other users
+  showReadReceipts Boolean  @default(true)   // disable read receipts toggle
+  mutedUsers       String[]                  // userIds this user has muted (no notifications from)
+  blockedUsers     String[]                  // userIds this user has blocked
+
+  friendsAdded    Friendship[] @relation("adder")
+  friendsReceived Friendship[] @relation("receiver")
+  callsInitiated  CallSession[] @relation("caller")
+  callsReceived   CallSession[] @relation("callee")
+  callParticipants CallParticipant[]
+  messages        Message[]
+  reactions       Reaction[]
+  notifications   Notification[]
+  refreshTokens   RefreshToken[]
+  reportsSent     Report[] @relation("reporter")
+  reportsReceived Report[] @relation("reported")
+
+  @@index([lastSeen])
+  @@index([isPrivate])
+}
+
+model Friendship {
+  id         String   @id @default(uuid())
+  adderId    String
+  receiverId String
+  status     String   // pending | accepted | blocked
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  adder    User @relation("adder",    fields: [adderId],    references: [id])
+  receiver User @relation("receiver", fields: [receiverId], references: [id])
+
+  @@unique([adderId, receiverId])
+  @@index([adderId, status])
+  @@index([receiverId, status])
+}
+
+model CallSession {
+  id          String    @id @default(uuid())
+  roomId      String    @unique
+  callerId    String
+  calleeId    String    // initial callee; others join via invite
+  status      String    // ringing | active | ended | missed | declined | reconnecting
+  startedAt   DateTime?
+  endedAt     DateTime?
+  duration    Int?      // seconds
+  createdAt   DateTime  @default(now())
+
+  caller       User             @relation("caller", fields: [callerId], references: [id])
+  callee       User             @relation("callee", fields: [calleeId], references: [id])
+  participants CallParticipant[]
+  messages     Message[]
+  reactions    Reaction[]
+  recording    CallRecording?
+
+  @@index([callerId, createdAt(sort: Desc)])
+  @@index([calleeId, createdAt(sort: Desc)])
+  @@index([status])
+}
+
+model CallParticipant {
+  id       String   @id @default(uuid())
+  callId   String
+  userId   String
+  joinedAt DateTime @default(now())
+  leftAt   DateTime?
+
+  call CallSession @relation(fields: [callId], references: [id], onDelete: Cascade)
+  user User        @relation(fields: [userId],  references: [id])
+
+  @@unique([callId, userId])
+  @@index([userId])
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  content   String?
+  imageUrl  String?
+  userId    String
+  callId    String
+  createdAt DateTime @default(now())
+  editedAt  DateTime?
+  isDeleted Boolean  @default(false)
+  readAt    DateTime?  // when recipient read the message
+
+  // Auto-deletion / ephemeral messages
+  deleteAt    DateTime?  // auto-delete timestamp (24h/7d/never)
+  isEphemeral Boolean  @default(false)  // ephemeral mode message — deleteAt = createdAt + 24h
+
+  user User        @relation(fields: [userId], references: [id])
+  call CallSession @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  @@index([callId, createdAt(sort: Desc)])
+  @@index([userId])
+  @@index([deleteAt])  // for cleanup job
+  @@index([readAt])  // for read receipt queries
+}
+
+model Reaction {
+  id        String   @id @default(uuid())
+  emoji     String
+  pack      String   @default("default") // default | fire | love | hype
+  userId    String
+  callId    String
+  createdAt DateTime @default(now())
+
+  user User        @relation(fields: [userId], references: [id])
+  call CallSession @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  @@index([callId, createdAt(sort: Desc)])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String   // missed_call | friend_request | call_invite
+  title     String
+  body      String
+  data      Json?    // { callId, callerId, etc. }
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read, createdAt(sort: Desc)])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+model Report {
+  id        String   @id @default(uuid())
+  reporterId  String   // user who filed the report
+  reportedId  String   // user being reported
+  reason      String   // harassment | spam | inappropriate | other
+  description String?  // optional details
+  callId      String?  // related call session (if applicable)
+  createdAt   DateTime @default(now())
+  resolved    Boolean  @default(false)
+
+  reporter User @relation("reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reported User @relation("reported", fields: [reportedId], references: [id], onDelete: Cascade)
+
+  @@index([reportedId, createdAt(sort: Desc)])
+  @@index([resolved])
+}
+
+model CallRecording {
+  id        String   @id @default(uuid())
+  callId    String   @unique
+  url       String   // encrypted object storage URL
+  key       String   // encryption key reference (KMS)
+  duration  Int      // seconds
+  size      Int      // bytes
+  createdAt DateTime @default(now())
+  expiresAt DateTime // auto-delete after 30 days
+
+  call CallSession @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])  // for cleanup job
+}

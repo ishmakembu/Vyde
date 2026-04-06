@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: vide-ws
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm install && npx prisma generate
+    startCommand: npm run start:ws
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_SECRET
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: INTERNAL_SECRET
+        sync: false
