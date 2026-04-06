@@ -13,6 +13,7 @@ import { useSession } from 'next-auth/react';
 import { IconButton } from '@/components/ui/GlassButton';
 import { Avatar } from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
+import { Copy } from 'lucide-react';
 
 const ChatPanel = lazy(() => import('@/components/chat/ChatPanel').then((m) => ({ default: m.ChatPanel })));
 const ReactionsPanel = lazy(() => import('@/components/call/ReactionsPanel').then((m) => ({ default: m.ReactionsPanel })));
@@ -31,6 +32,7 @@ export default function CallPage() {
   const {
     status,
     callId,
+    joinCode,
     isMuted,
     isCameraOff,
     isScreenSharing,
@@ -68,6 +70,7 @@ export default function CallPage() {
   const [showChat, setShowChat] = useState(false);
   const [showMusic, setShowMusic] = useState(false);
   const [theatreMode, setTheatreMode] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
 
   const canScreenShare = typeof navigator !== 'undefined' &&
     typeof (navigator.mediaDevices as { getDisplayMedia?: unknown })?.getDisplayMedia === 'function' &&
@@ -415,6 +418,20 @@ export default function CallPage() {
             <span className={cn('badge', connectionQuality === 'excellent' && 'badge-success')}>
               {connectionQuality.toUpperCase()}
             </span>
+          )}
+          {joinCode && (
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(joinCode).catch(() => {});
+                setCodeCopied(true);
+                setTimeout(() => setCodeCopied(false), 2000);
+              }}
+              title="Copy join code"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--cyan)]/15 border border-[var(--cyan)]/30 text-[var(--cyan)] text-[11px] font-bold tracking-widest hover:bg-[var(--cyan)]/25 transition-colors"
+            >
+              {codeCopied ? '✓ Copied' : `${joinCode}`}
+              {!codeCopied && <Copy className="w-3 h-3 opacity-70" />}
+            </button>
           )}
         </div>
       </div>

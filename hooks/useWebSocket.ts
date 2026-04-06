@@ -6,7 +6,17 @@ import type { AppNotification } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useOfflineQueue, processOfflineQueue } from '@/stores/offlineQueue';
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:4000';
+// NEXT_PUBLIC_WS_URL is baked at build time. If it wasn't set when the app was
+// built (e.g. first Render deploy), fall back to same-origin wss:// so the
+// combined server (HTTP + WS on the same port) always receives our connections.
+function resolveWsUrl(): string {
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
+  if (typeof window !== 'undefined') {
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${proto}://${window.location.host}`;
+  }
+  return 'ws://localhost:4000';
+}
 
 const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000, 32000, 60000];
@@ -70,8 +80,9 @@ export function useWebSocket() {
 
     isConnectingRef.current = true;
 
+    const wsUrl = resolveWsUrl();
     try {
-      const ws = new WebSocket(WS_URL);
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       const connectionTimeout = setTimeout(() => {
@@ -206,6 +217,32 @@ export function useWebSocket() {
             inCall: u.inCall,
           });
         });
+        break;
+      }
+
+      case 'call:join_code': {
+        const { code } = message.payload as { code: string; callId: string };
+        useCallStore.getState().setJoinCode(code);
+        break;
+      }
+
+      case 'call:join_granted': {
+        const granted = message.payload as { callId: string; roomId: string; code?: string };
+        useCallStore.getState().setCallId(granted.callId);
+        useCallStore.getState().setRoomId(granted.roomId);
+        useCallStore.getState().setStatus('connecting');
+        if (granted.code) useCallStore.getState().setJoinCode(granted.code);
+        // AppShell listens for this event and calls router.push('/call')
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('vide:nav', { detail: '/call' }));
+        }
+        break;
+      }
+
+      case 'call:join_error': {
+        const { error } = message.payload as { error: string };
+        useCallStore.getState().resetCall();
+        useUIStore.getState().showToast(error || 'Could not join call', 'error');
         break;
       }
 

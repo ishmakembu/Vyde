@@ -21,6 +21,7 @@ interface CallState {
   controlsVisible: boolean;
   pipActive: boolean;
   pipPosition: { x: number; y: number };
+  joinCode: string | null;
   incomingCall: {
     callId: string;
     callerId: string;
@@ -42,6 +43,7 @@ interface CallState {
   setControlsVisible: (visible: boolean) => void;
   setPipActive: (active: boolean) => void;
   setPipPosition: (position: { x: number; y: number }) => void;
+  setJoinCode: (code: string | null) => void;
   setIncomingCall: (incoming: CallState['incomingCall']) => void;
   resetCall: () => void;
 }
@@ -65,8 +67,10 @@ export const useCallStore = create<CallState>()(
     controlsVisible: true,
     pipActive: false,
     pipPosition: { x: 0, y: 0 },
+    joinCode: null,
     incomingCall: null,
     setStatus: (status) => set({ status }),
+    setJoinCode: (joinCode) => set({ joinCode }),
     setCallId: (callId) => set({ callId }),
     setRoomId: (roomId) => set({ roomId }),
     setPeerInfo: (peerId, peerUsername, peerAvatar) =>
@@ -103,6 +107,7 @@ export const useCallStore = create<CallState>()(
         controlsVisible: true,
         pipActive: false,
         pipPosition: { x: 0, y: 0 },
+        joinCode: null,
         incomingCall: null,
       }),
   }))

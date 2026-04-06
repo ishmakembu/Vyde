@@ -10,11 +10,10 @@ import Image from 'next/image';
 import { Avatar } from '@/components/ui/Avatar';
 import { GlassButton } from '@/components/ui/GlassButton';
 import { GlassInput } from '@/components/ui/GlassInput';
-import { IncomingCallModal } from '@/components/call/IncomingCallModal';
 import { useCallStore } from '@/stores/callStore';
 import { useUIStore } from '@/stores/uiStore';
 import { sendWsMessage } from '@/hooks/useWebSocket';
-import { Phone, UserPlus, UserCheck, Clock, PhoneOff } from 'lucide-react';
+import { Phone, UserPlus, UserCheck, Clock, PhoneOff, Copy, Link2 } from 'lucide-react';
 
 interface User {
   id: string;
@@ -88,7 +87,14 @@ function UserCard({ user, onCall, onAddFriend, isFriend, hasPendingRequest, isOn
         <div className="flex gap-2 w-full mt-1">
           {isFriend ? (
             <>
-              <GlassButton variant="active" size="sm" className="flex-1" disabled={!isOnline || isInCall} title={isInCall ? 'In a call' : 'Call'}>
+              <GlassButton
+                onClick={(e) => { e.preventDefault(); onCall(user); }}
+                variant={isOnline && !isInCall ? 'active' : 'default'}
+                size="sm"
+                className="flex-1"
+                disabled={!isOnline || isInCall}
+                title={isInCall ? 'In a call' : 'Call'}
+              >
                 <Phone className="w-3.5 h-3.5" />
               </GlassButton>
               <GlassButton variant="default" size="sm" disabled className="flex-1" title="Friends">
@@ -136,9 +142,21 @@ export default function DirectoryPage() {
   const { userPresenceMap, searchQuery, setSearchQuery } = useUIStore();
   const queryClient = useQueryClient();
   const [mounted, setMounted] = useState(false);
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [joiningCode, setJoiningCode] = useState(false);
+  const [createCallLoading, setCreateCallLoading] = useState(false);
+  const [createdCallInfo, setCreatedCallInfo] = useState<{ callId: string; code: string } | null>(null);
 
   useEffect(() => {
     setMounted(true);
+  }, []);
+
+  // Stop join-spinner once WS responds
+  useEffect(() => {
+    const onGranted = () => setJoiningCode(false);
+    const onError = () => setJoiningCode(false);
+    window.addEventListener('vide:nav', onGranted);
+    return () => { window.removeEventListener('vide:nav', onGranted); };
   }, []);
 
   const { data: usersData, isLoading: usersLoading } = useQuery({
@@ -206,6 +224,31 @@ export default function DirectoryPage() {
   const onlineUsers = filteredUsers.filter(isUserOnline);
   const offlineUsers = filteredUsers.filter((user) => !isUserOnline(user));
 
+  const handleCreateCall = async () => {
+    if (!session?.user?.id) return;
+    setCreateCallLoading(true);
+    const callId = `call-${Date.now()}`;
+    const roomId = `room-${Date.now()}`;
+    useCallStore.getState().setCallId(callId);
+    useCallStore.getState().setRoomId(roomId);
+    useCallStore.getState().setStatus('connecting');
+    // Ask the WS server to create a named room with a join code
+    sendWsMessage({ type: 'call:create', payload: { callId, roomId } });
+    // Navigate immediately; join code will arrive via 'call:join_code' WS message
+    router.push('/call');
+    setCreateCallLoading(false);
+  };
+
+  const handleJoinByCode = async () => {
+    const code = joinCodeInput.trim().toUpperCase();
+    if (!code || code.length < 4) return;
+    setJoiningCode(true);
+    sendWsMessage({ type: 'call:join_by_code', payload: { code, userId: session?.user?.id } });
+    // Result comes back as call:join_granted or call:join_error via WS handler
+    // Set a timeout to stop loading if no response
+    setTimeout(() => setJoiningCode(false), 8000);
+  };
+
   const handleCall = (user: User) => {
     if (!session?.user?.id) return;
     const roomId = `room-${Date.now()}`;
@@ -236,6 +279,44 @@ export default function DirectoryPage() {
   return (
     <div className="p-6">
       <div className="max-w-4xl mx-auto">
+
+        {/* ── Join / Create call panel ──────────────────────────────────── */}
+        <div className="glass rounded-xl p-4 mb-5 flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+          {/* Create new call */}
+          <GlassButton
+            variant="active"
+            onClick={handleCreateCall}
+            disabled={createCallLoading}
+            className="shrink-0 gap-2"
+          >
+            <Phone className="w-4 h-4" />
+            New Call
+          </GlassButton>
+
+          <div className="h-px sm:h-6 sm:w-px bg-[var(--border-glass)] self-stretch sm:self-auto" />
+
+          {/* Join by code */}
+          <div className="flex flex-1 gap-2">
+            <GlassInput
+              placeholder="Enter join code (e.g. AB12CD)"
+              value={joinCodeInput}
+              onChange={(e) => setJoinCodeInput((e.target.value).toUpperCase())}
+              onKeyDown={(e) => e.key === 'Enter' && handleJoinByCode()}
+              className="flex-1 !mb-0 uppercase tracking-widest"
+              maxLength={8}
+            />
+            <GlassButton
+              variant="default"
+              onClick={handleJoinByCode}
+              disabled={joiningCode || joinCodeInput.trim().length < 4}
+              className="gap-2 shrink-0"
+            >
+              <Link2 className="w-4 h-4" />
+              {joiningCode ? 'Joining…' : 'Join'}
+            </GlassButton>
+          </div>
+        </div>
+
         <GlassInput
           placeholder="Search users..."
           value={searchQuery}
@@ -311,29 +392,6 @@ export default function DirectoryPage() {
           </div>
         )}
       </div>
-
-      <AnimatePresence>
-        {incomingCall && (
-          <IncomingCallModal
-            callerId={incomingCall.callerId}
-            callerUsername={incomingCall.callerUsername}
-            callerAvatar={incomingCall.callerAvatar}
-            onAccept={() => {
-                sendWsMessage({ type: 'call:accept', payload: { callId: incomingCall.callId, roomId: '' } });
-                useCallStore.getState().setCallId(incomingCall.callId);
-                useCallStore.getState().setPeerInfo(incomingCall.callerId, incomingCall.callerUsername, incomingCall.callerAvatar);
-                useCallStore.getState().setStatus('connecting');
-                useCallStore.getState().setIncomingCall(null);
-                router.push('/call');
-              }}
-            onDecline={() => {
-                sendWsMessage({ type: 'call:decline', payload: { callId: incomingCall.callId } });
-                useCallStore.getState().setIncomingCall(null);
-                useCallStore.getState().setStatus('idle');
-              }}
-          />
-        )}
-      </AnimatePresence>
     </div>
   );
 }

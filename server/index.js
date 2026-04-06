@@ -110,6 +110,20 @@ const server = createServer((req, res) => {
 
 const wss = new WebSocketServer({ server });
 
+// Heartbeat to clean up stale connections
+const interval = setInterval(() => {
+  clients.forEach((client) => {
+    if (client.ws.readyState !== WebSocket.OPEN) {
+      clients.delete(client.clientId);
+      if (client.userId) userClients.delete(client.userId);
+      return;
+    }
+    // Optional: client.ws.ping();
+  });
+}, 30000);
+
+wss.on('close', () => clearInterval(interval));
+
 wss.on('connection', (ws, req) => {
   const { query } = parse(req.url || '', true);
   const clientId = query.clientId || generateId();
@@ -257,7 +271,8 @@ async function handleMessage(client, message, clientId) {
       if (!client.userId) return;
 
       const callee = userClients.get(calleeId);
-      if (!callee) {
+      if (!callee || callee.ws.readyState !== WebSocket.OPEN) {
+        console.log(`[WS] Callee ${calleeId} is offline or connection not open`);
         // Callee is offline — persist a missed_call notification so they see it on login
         prisma.notification.create({
           data: {
@@ -308,6 +323,7 @@ async function handleMessage(client, message, clientId) {
         startedAt: null,
       });
 
+      console.log(`[WS] Sending call:incoming to ${calleeId} from ${client.userId}`);
       callee.ws.send(JSON.stringify({
         type: 'call:incoming',
         payload: {
@@ -315,7 +331,9 @@ async function handleMessage(client, message, clientId) {
           roomId,
           caller: { id: client.userId, username: callerUsername ?? client.username ?? 'Unknown', avatar: callerAvatar ?? client.avatar ?? null },
         },
-      }));
+      }), (err) => {
+        if (err) console.error(`[WS] Failed to send call:incoming to ${calleeId}:`, err);
+      });
 
       setTimeout(() => {
         const session = callSessions.get(callId);

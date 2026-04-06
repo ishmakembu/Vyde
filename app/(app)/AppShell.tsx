@@ -8,7 +8,10 @@ import { Avatar } from '@/components/ui/Avatar';
 import { MobileNav } from '@/components/ui/MobileNav';
 import { Toast } from '@/components/ui/Toast';
 import { useUIStore } from '@/stores/uiStore';
-import { useWebSocket } from '@/hooks/useWebSocket';
+import { useWebSocket, sendWsMessage } from '@/hooks/useWebSocket';
+import { IncomingCallModal } from '@/components/call/IncomingCallModal';
+import { useCallStore } from '@/stores/callStore';
+import { useRouter } from 'next/navigation';
 
 function NotificationBell() {
   const { notifications, unreadNotifCount, markAllNotificationsRead } = useUIStore();
@@ -117,9 +120,64 @@ export function AppShell({ children, username }: { children: React.ReactNode; us
   useWebSocket(); // single persistent WS connection for the entire authenticated session
   const pathname = usePathname();
   const { searchQuery, setSearchQuery } = useUIStore();
+  const router = useRouter();
+  const { incomingCall, setIncomingCall, setStatus: setCallStatus, setPeerInfo, setCallId, setRoomId } = useCallStore();
+
+  // Handle programmatic navigation dispatched by WS handlers (e.g. join-by-code)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const path = (e as CustomEvent<string>).detail;
+      if (path) router.push(path);
+    };
+    window.addEventListener('vide:nav', handler);
+    return () => window.removeEventListener('vide:nav', handler);
+  }, [router]);
+
+  const handleAcceptCall = () => {
+    if (!incomingCall) return;
+    
+    // Send signaling message
+    sendWsMessage({ 
+      type: 'call:accept', 
+      payload: { callId: incomingCall.callId, roomId: '' } 
+    });
+
+    // Update store state
+    setCallId(incomingCall.callId);
+    setPeerInfo(incomingCall.callerId, incomingCall.callerUsername, incomingCall.callerAvatar);
+    setCallStatus('connecting');
+    setIncomingCall(null);
+    
+    // Navigate to call page
+    router.push('/call');
+  };
+
+  const handleDeclineCall = () => {
+    if (!incomingCall) return;
+    
+    // Send signaling message
+    sendWsMessage({ 
+      type: 'call:decline', 
+      payload: { callId: incomingCall.callId } 
+    });
+
+    // Update store state
+    setCallStatus('idle');
+    setIncomingCall(null);
+  };
+
   return (
     <>
       <Toast />
+      {incomingCall && (
+        <IncomingCallModal
+          callerId={incomingCall.callerId}
+          callerUsername={incomingCall.callerUsername}
+          callerAvatar={incomingCall.callerAvatar}
+          onAccept={handleAcceptCall}
+          onDecline={handleDeclineCall}
+        />
+      )}
       <div className="min-h-screen w-full bg-[var(--bg-base)] text-[var(--text-primary)] font-sans">
         <div className="fixed inset-0 pointer-events-none z-0">
           <div className="absolute top-[10%] left-[20%] w-[600px] h-[600px] bg-[rgba(0,80,120,0.15)] blur-[120px] rounded-full"></div>
